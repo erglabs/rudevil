@@ -1,0 +1,9 @@
+{
+    "LABEL": {
+      "name": "ERROR:TitleFormat",
+      "color": "EEEEEE"
+    },
+    "CHECKS": {
+      "regexp": "^(feat|fix|chore|doc|test): "
+    }
+  }

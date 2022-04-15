@@ -1,0 +1,28 @@
+[package]
+name = "rudevil"
+version = "0.1.0"
+edition = "2021"
+authors = ["Mateusz Matejuk <esavier@erglabs.org>"]
+license = "MIT"
+description = "Simple automount system demon "
+repository = "https://github.com/erglabs/rudevil"
+keywords = ["automount"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow             = { version = "1.0" }
+bytes              = { version = "1.1" }
+config             = { version = "0.13" }
+file-owner         = { version = "0.1" }
+guard              = { version = "0.5" }
+notify             = { version = "4.0" }
+regex              = { version = "1.5" }
+sys-mount          = { version = "1.5" }
+tokio              = { version = "1.17", features = ["full"] }
+tracing            = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unwrap_return      = { version = "0.1" }
+users              = { version = "0.11" }
+
+[features]
+default = []

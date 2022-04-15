@@ -1,0 +1,105 @@
+name: Unit Test
+
+on:
+  push:
+    branches:
+      - "devel"
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "rust-toolchain"
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUST_BACKTRACE: short
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    name: Check if job prerequisites are valid
+    outputs:
+      decision: ${{ steps.decision.outputs.value }}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 32
+
+      - id: decision
+        run: |
+          echo "commit file list:"
+          if git --no-pager diff --name-only HEAD~1 | grep -v .sh | grep -v .md
+          then
+            echo "it looks like a valid commit, enabling the tests"
+            echo "::set-output name=value::true"
+          else
+            echo "This does not look like the testable commit"
+            echo "::set-output name=value::false"
+          fi
+
+  unit-test:
+    name: Unit
+    needs: checkpoint
+    runs-on: ubuntu-latest
+    if: ${{ needs.checkpoint.outputs.decision == 'true' }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+          components: clippy, rustfmt
+
+      - name: Cache cargo directories
+        uses: actions/cache@v2.1.6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache cargo target dir
+        uses: actions/cache@v2.1.6
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-target-
+
+      - uses: fibiol/cargo-actions@v1
+        with:
+          command: clippy
+          args: --all-features --all-targets -- -D warnings
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: -- --check
+
+
+      - name: Deny invalid licenses
+        run: |
+          cargo install cargo-deny
+          cd ${HOME}/work/QuOS-Client/QuOS-Client
+          cargo deny check licenses
+
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --workspace
+
+      - name: Clear bloat
+        run: find . -path "./target/debug/deps*" -type f ! -name "*.*" | xargs rm
