@@ -49,5 +49,5 @@ Also, you have to fork unless you are part of the organization, obviously...
 
 ### contact:
 
-<esvi at pm dot me>
+"esvi at pm dot me"
 anything else goes automatically to spam;
