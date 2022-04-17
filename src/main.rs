@@ -84,7 +84,7 @@ async fn extract_device(path: &std::path::Path) -> Option<String> {
 
 #[instrument]
 async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf) {
-    println!("processing {:?}", path);
+    tracing::info!("processing {:?}", path);
     let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
     if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
         return;
@@ -94,10 +94,9 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
       tracing::warn!("couldn't match the device for some reason?");
       return;
     });
-    println!("device is {:?}", device);
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
-    println!("destpath is {:?}", dest);
+    tracing::debug!("destpath is {:?}", dest);
 
     // since this point we need to remember to cleanup
     std::fs::create_dir(dest.clone()).unwrap();
@@ -108,22 +107,23 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
     // set ownership before mounting
     if let Err(e) = set_owner(&path, uid) {
         tracing::error!("failed to set user ownership! {}", e);
-        drop(remove_dir(&path).await); // we do not care about the result much
+        if let Err(e) = remove_dir(&path).await {
+            tracing::error!("tried to cleanup but this happened: {:?}", e);
+        }
     }
     if let Err(e) = set_group(&path, gid) {
         tracing::error!("failed to set group ownership! {}", e);
-        drop(remove_dir(&path).await); // we do not care about the result much
+        if let Err(e) = remove_dir(&path).await {
+            tracing::error!("tried to cleanup but this happened: {:?}", e);
+        }
     }
 
     // Fetch a listed of supported file systems on this system. This will be used
     // as the fstype to `Mount::new`, as the `Auto` mount parameter.
     let supported = match SupportedFilesystems::new() {
-        Ok(supported) => {
-            println!("{:?}", &supported);
-            supported
-        }
+        Ok(supported) => supported,
         Err(why) => {
-            eprintln!("failed to get supported file systems: {}", why);
+            tracing::error!("failed to get supported file systems: {}", why);
             exit(1);
         }
     };
@@ -151,7 +151,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) {
       tracing::warn!("couldn't match the device for some reason?");
       return;
     });
-    println!("processing {:?}", path);
+    tracing::info!("processing {:?}", path);
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
     tracing::debug!("destpath is {:?}", dest);
@@ -166,7 +166,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ### logging setup
-    println!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
+    tracing::info!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
     let is_debug_mode = std::env::var("DEBUGMODE").map_or(false, |x| !x.is_empty());
 
     let subscriber = tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(
@@ -211,8 +211,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "/storage".to_owned());
 
     // lets check the creds
-    let group_id = find_uid(wanteduser.to_owned()).await;
-    let user_id = find_gid(wantedgroup.to_owned()).await;
+    let user_id = find_uid(wanteduser.to_owned()).await;
+    let group_id = find_gid(wantedgroup.to_owned()).await;
     let workdir = find_workir(wantedworkidr.to_owned()).await;
 
     tracing::trace!("The '{}' group has the ID {}", wantedgroup, group_id);
@@ -233,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(DebouncedEvent::Remove(path)) => {
                 process_removed(path, workdir.clone()).await;
             }
-            Err(e) => println!("watch error: {:?}", e),
+            Err(e) => tracing::error!("watch error: {:?}", e),
             _ => {} // do nothing on unsupported events,
         }
     }
