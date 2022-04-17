@@ -28,12 +28,17 @@ intended and default mode is for user to be in `plugdev` mode. Any `/dev/sdXY` w
 
 Trashy state means someone mounted /dev/sdx1 (or via rudevil) and unplugged the device without unmounting (or rudevil crashed before it could handle cleanup). That mount (/dev/sdx1 in /storage/sdx1) will not be cleaned by rudevil before mounting and will result in mount error (not crash)
 
+Be mindfull that rudevil does not handle root devices (i.e. `/dev/sdX` without a number ). I know, i use some of my devices like that but most people don't and usage as `sdXY` would be in 95% correct one.
+This may change in the future but its okay for now. This also means that luks devices are not handled as well - and that also may or may not change in the future, we will see...
+
 there are only few errors that result in crash: can't find user/group/workdir, or permissions error.
 In first case, rtfm, in second run as root.
 ... great, that was easiest troubleshooting ever.
 
 ### But i run ubuntu, will it work there?
 it should, if it does not, report an issue
+
+... also you should stop and install gentoo
 
 ### is systemd unit provided ?
 not yet
