@@ -1,80 +1,125 @@
-extern crate notify;
-pub use config::Config;
+use config::Config;
 use file_owner::{set_group, set_owner};
-pub use guard::*;
-pub use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
-pub use std::os::unix::prelude::PermissionsExt;
-pub use std::path::PathBuf;
-pub use std::sync::mpsc::channel;
-pub use std::time::Duration;
+use guard::*;
+use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
+use std::os::unix::prelude::PermissionsExt;
+use std::path::PathBuf;
+use std::sync::mpsc::channel;
+use std::time::Duration;
 use tokio::fs::remove_dir;
 use tracing::instrument;
-pub use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
-pub use tracing_subscriber::util::SubscriberInitExt;
-pub use unwrap_return::*;
-pub use users::{Groups, Users, UsersCache};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use users::{Groups, Users, UsersCache};
 
 use regex::Regex;
 
-use std::process::exit;
 use sys_mount::{self, FilesystemType};
 use sys_mount::{unmount, UnmountFlags};
 use sys_mount::{Mount, MountFlags, SupportedFilesystems};
 
-// we die if we can't find the group, there is no point in running
+/// Translates desired group (in string) to group id
+///
+/// Returns anyhow::Result<u32>
+/// 
+/// Group is provided by config, we need to change it to the uid to be compatible
+/// with all of the libraries that uses that to change i.e. permissions or
+/// ownership.
+///
+/// # Errors
+/// 
+/// Returns Error if the group does not exists
+/// Returns u32 if the group does exists
 #[instrument]
-async fn find_gid(name: String) -> u32 {
+async fn find_gid(name: String) -> anyhow::Result<u32> {
     let cache = UsersCache::new();
     let group = cache.get_group_by_name(&name);
-    guard::guard!(let group = group.unwrap() else { exit(23) } );
+    guard::guard!(let group = group.unwrap() else { return Err(anyhow::anyhow!("no such group")) } );
     tracing::info!(
         "found group: {} with id {}",
         group.name().to_string_lossy(),
         group.gid()
     );
-    group.gid()
+    Ok(group.gid())
 }
 
+/// Translates user (in string) to user id
+///
+/// Returns anyhow::Result<u32>
+/// 
+/// User is provided by config, we need to change it to the uid to be compatible
+/// with all of the libraries that uses that to change i.e. permissions or
+/// ownership.
+///
+/// # Errors
+/// 
+/// Returns Error if the user does not exists
+/// Returns u32 if the user does exists
 #[instrument]
-async fn find_uid(name: String) -> u32 {
+async fn find_uid(name: String) -> anyhow::Result<u32> {
     tracing::info!("requesting user with {}", name);
     let cache = UsersCache::new();
     let user = cache.get_user_by_name(&name);
-    guard::guard!(let Some(user) = user else { exit(24) } );
+    guard::guard!(let Some(user) = user else { return Err(anyhow::anyhow!("no such group")) } );
     tracing::info!(
         "found user: {} with id {}",
         user.name().to_string_lossy(),
         user.uid()
     );
-    user.uid()
+    Ok(user.uid())
 }
 
+/// Validates whether the desired workdir exists
+///
+/// Returns anyhow::Result<PathBuf>
+/// 
+/// Checks if the desired workdir base is safe from security and
+/// usage perspective. Errors out on any discrency.
+/// - path must be absolute
+/// - path must exist
+/// - path must start with root "/"
+/// - path must be a directory
+/// - path can not be a symlink
+/// 
+/// # Errors
+/// 
+/// Returns Error if the group does not exists
+/// Returns PathBuf if its okay
 #[instrument]
-async fn find_workir(path: String) -> PathBuf {
+async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
     let res = PathBuf::from(&path);
     if res.is_symlink() {
-        tracing::error!("path does not exists, do not waste my time, got {}", &path);
-        exit(-27);
+        return Err(anyhow::anyhow!("path does not exists, do not waste my time, got {}", &path));
     };
     if !res.is_dir() {
-        tracing::error!("desired path is invalid, not a dir");
-        exit(-29);
+        return Err(anyhow::anyhow!("desired path is invalid, not a dir"))
     };
     if !res.starts_with("/") {
-        tracing::error!("wordkir path must start at root, got {}", &path);
-        exit(-25);
+        return Err(anyhow::anyhow!("wordkir path must start at root, got {}", &path))
     };
     if !res.is_absolute() {
-        tracing::error!("desired path must be absolute, got {}", &path);
-        exit(-26);
+        return Err(anyhow::anyhow!("desired path must be absolute, got {}", &path))
     };
     if res.is_symlink() {
-        tracing::error!("path can not be a simlink");
-        exit(-30);
+        return Err(anyhow::anyhow!("path can not be a symlink"))
     };
-    res
+    Ok(res)
 }
 
+
+/// Validates the correlation between device and event
+///
+/// Returns Option<String>
+/// Returns None in case there is something wrong.
+/// 
+/// Checks if the event and the path related to the event
+/// is a valid and mountable device.
+/// I was lazy with it so i am just matching the regexp.
+/// On 99.4% systems this should be secure enough for now.
+/// 
+/// # Errors
+/// 
+/// none, hah :)
 #[instrument]
 async fn extract_device(path: &std::path::Path) -> Option<String> {
     guard!(let Some(p) = path.as_os_str().to_str() else {return None});
@@ -82,6 +127,20 @@ async fn extract_device(path: &std::path::Path) -> Option<String> {
     Some(res.to_owned())
 }
 
+/// Handles the "created" event type - case when block device was added
+///
+/// Returns ()
+/// 
+/// Acts as a handler. Takes Path related to the event, runs it through extractors
+/// and validators, and if everything checks out, creates the mounting directory
+/// sets permissions for the user and mounts the drive. Internal state is prone to
+/// getting poisoned so in some places it handles its own cleanup.
+/// 
+/// # Errors
+/// 
+/// nah, none, at least in theory ;)
+/// However, if the filesystem is not supported, the path extractor fails or allowed
+/// path do not match the drive, it will return early.
 #[instrument]
 async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf) {
     tracing::info!("processing {:?}", path);
@@ -124,7 +183,7 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
         Ok(supported) => supported,
         Err(why) => {
             tracing::error!("failed to get supported file systems: {}", why);
-            exit(1);
+            return;
         }
     };
     // The source block will be mounted to the target directory, and the fstype is likely
@@ -140,6 +199,19 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
     }
 }
 
+/// Handles the "removed" event type - case when block device was removed
+///
+/// Returns ()
+/// 
+/// Acts as a handler. Takes Path related to the event, runs it through extractors
+/// and validators. Performas a cleanup of the device if it was removed to early.
+/// It does not take into account events like manual unmount of the drive etc. 
+/// If the directory was not created nor mounted by rudevil, but it exists AND the
+/// drive was removed, then it will also remove the directory. 
+/// 
+/// # Errors
+/// 
+/// Should be none. Just early returns in case the path do not match.
 #[instrument]
 async fn process_removed(path: PathBuf, workingdir: PathBuf) {
     let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
@@ -163,6 +235,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) {
     drop(remove_dir(dest).await);
 }
 
+/// Yo, main body what do you expect. It does whatever usually main does. 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ### logging setup
@@ -211,9 +284,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "/storage".to_owned());
 
     // lets check the creds
-    let user_id = find_uid(wanteduser.to_owned()).await;
-    let group_id = find_gid(wantedgroup.to_owned()).await;
-    let workdir = find_workir(wantedworkidr.to_owned()).await;
+    let user_id = find_uid(wanteduser.to_owned()).await?;
+    let group_id = find_gid(wantedgroup.to_owned()).await?;
+    let workdir = find_workir(wantedworkidr.to_owned()).await?;
 
     tracing::trace!("The '{}' group has the ID {}", wantedgroup, group_id);
     tracing::trace!("The '{}' user has the ID {}", wanteduser, user_id);
