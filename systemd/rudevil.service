@@ -1,0 +1,15 @@
+[Unit]
+Description=RuDevil daemon
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=3
+User=root
+ExecStart=/opt/rudevil/rudevil
+Environment=RUDEVIL_USER="root"
+Environment=RUDEVIL_GROUP="plugdev"
+Environment=RUDEVIL_WORKDIR="/storage:
+
+[Install]
+WantedBy=multi-user.target

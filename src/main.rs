@@ -192,7 +192,7 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
         .fstype(FilesystemType::from(&supported))
         .flags(MountFlags::NODEV)
         .flags(MountFlags::NOSUID)
-        .mount(path, dest);
+        .mount(&path, dest);
 
     if let Err(e) = result {
         tracing::error!("mount failed, {}", e)
