@@ -92,7 +92,6 @@ jobs:
       - name: Deny invalid licenses
         run: |
           cargo install cargo-deny
-          cd ${HOME}/work/QuOS-Client/QuOS-Client
           cargo deny check licenses
 
       - name: Test
