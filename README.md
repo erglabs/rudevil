@@ -2,6 +2,10 @@
 # rudevil
 Simple automount daemon for linux.
 
+tested with:
+- btrfs,ext4 - works just fine
+- vfat - does not work, this is kind of problematic, vfat does not support ownership, and is problematic to mount. From my experiments its broken. Fixing it will require adding changes to the mount library we are using which is planned. but will depend on the amount of time we have for it.
+
 ### What is that
 For servers and userless machines, it would be nice to be able to mount devices without user interaction. This tool serves exactly that purpose.
 
@@ -41,7 +45,9 @@ it should, if it does not, report an issue
 ... also you should stop and install gentoo
 
 ### is systemd unit provided ?
-not yet
+yes, in the `systemd` folder.
+Remember to change the user/group/workdir and point the service to wherever the binary is.
+
 
 ### is there installer ?
 no, so far not planned.

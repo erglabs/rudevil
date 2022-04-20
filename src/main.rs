@@ -21,13 +21,13 @@ use sys_mount::{Mount, MountFlags, SupportedFilesystems};
 /// Translates desired group (in string) to group id
 ///
 /// Returns anyhow::Result<u32>
-/// 
+///
 /// Group is provided by config, we need to change it to the uid to be compatible
 /// with all of the libraries that uses that to change i.e. permissions or
 /// ownership.
 ///
 /// # Errors
-/// 
+///
 /// Returns Error if the group does not exists
 /// Returns u32 if the group does exists
 #[instrument]
@@ -46,13 +46,13 @@ async fn find_gid(name: String) -> anyhow::Result<u32> {
 /// Translates user (in string) to user id
 ///
 /// Returns anyhow::Result<u32>
-/// 
+///
 /// User is provided by config, we need to change it to the uid to be compatible
 /// with all of the libraries that uses that to change i.e. permissions or
 /// ownership.
 ///
 /// # Errors
-/// 
+///
 /// Returns Error if the user does not exists
 /// Returns u32 if the user does exists
 #[instrument]
@@ -72,7 +72,7 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
 /// Validates whether the desired workdir exists
 ///
 /// Returns anyhow::Result<PathBuf>
-/// 
+///
 /// Checks if the desired workdir base is safe from security and
 /// usage perspective. Errors out on any discrency.
 /// - path must be absolute
@@ -80,45 +80,53 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
 /// - path must start with root "/"
 /// - path must be a directory
 /// - path can not be a symlink
-/// 
+///
 /// # Errors
-/// 
+///
 /// Returns Error if the group does not exists
 /// Returns PathBuf if its okay
 #[instrument]
 async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
     let res = PathBuf::from(&path);
     if res.is_symlink() {
-        return Err(anyhow::anyhow!("path does not exists, do not waste my time, got {}", &path));
+        return Err(anyhow::anyhow!(
+            "path does not exists, do not waste my time, got {}",
+            &path
+        ));
     };
     if !res.is_dir() {
-        return Err(anyhow::anyhow!("desired path is invalid, not a dir"))
+        return Err(anyhow::anyhow!("desired path is invalid, not a dir"));
     };
     if !res.starts_with("/") {
-        return Err(anyhow::anyhow!("wordkir path must start at root, got {}", &path))
+        return Err(anyhow::anyhow!(
+            "wordkir path must start at root, got {}",
+            &path
+        ));
     };
     if !res.is_absolute() {
-        return Err(anyhow::anyhow!("desired path must be absolute, got {}", &path))
+        return Err(anyhow::anyhow!(
+            "desired path must be absolute, got {}",
+            &path
+        ));
     };
     if res.is_symlink() {
-        return Err(anyhow::anyhow!("path can not be a symlink"))
+        return Err(anyhow::anyhow!("path can not be a symlink"));
     };
     Ok(res)
 }
-
 
 /// Validates the correlation between device and event
 ///
 /// Returns Option<String>
 /// Returns None in case there is something wrong.
-/// 
+///
 /// Checks if the event and the path related to the event
 /// is a valid and mountable device.
 /// I was lazy with it so i am just matching the regexp.
 /// On 99.4% systems this should be secure enough for now.
-/// 
+///
 /// # Errors
-/// 
+///
 /// none, hah :)
 #[instrument]
 async fn extract_device(path: &std::path::Path) -> Option<String> {
@@ -130,14 +138,14 @@ async fn extract_device(path: &std::path::Path) -> Option<String> {
 /// Handles the "created" event type - case when block device was added
 ///
 /// Returns ()
-/// 
+///
 /// Acts as a handler. Takes Path related to the event, runs it through extractors
 /// and validators, and if everything checks out, creates the mounting directory
 /// sets permissions for the user and mounts the drive. Internal state is prone to
 /// getting poisoned so in some places it handles its own cleanup.
-/// 
+///
 /// # Errors
-/// 
+///
 /// nah, none, at least in theory ;)
 /// However, if the filesystem is not supported, the path extractor fails or allowed
 /// path do not match the drive, it will return early.
@@ -192,7 +200,7 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
         .fstype(FilesystemType::from(&supported))
         .flags(MountFlags::NODEV)
         .flags(MountFlags::NOSUID)
-        .mount(path, dest);
+        .mount(&path, dest);
 
     if let Err(e) = result {
         tracing::error!("mount failed, {}", e)
@@ -202,15 +210,15 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
 /// Handles the "removed" event type - case when block device was removed
 ///
 /// Returns ()
-/// 
+///
 /// Acts as a handler. Takes Path related to the event, runs it through extractors
 /// and validators. Performas a cleanup of the device if it was removed to early.
-/// It does not take into account events like manual unmount of the drive etc. 
+/// It does not take into account events like manual unmount of the drive etc.
 /// If the directory was not created nor mounted by rudevil, but it exists AND the
-/// drive was removed, then it will also remove the directory. 
-/// 
+/// drive was removed, then it will also remove the directory.
+///
 /// # Errors
-/// 
+///
 /// Should be none. Just early returns in case the path do not match.
 #[instrument]
 async fn process_removed(path: PathBuf, workingdir: PathBuf) {
@@ -235,7 +243,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) {
     drop(remove_dir(dest).await);
 }
 
-/// Yo, main body what do you expect. It does whatever usually main does. 
+/// Yo, main body what do you expect. It does whatever usually main does.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ### logging setup
