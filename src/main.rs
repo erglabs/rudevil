@@ -288,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
         .get("group")
         .unwrap_or_else(|_| "plugdev".to_owned());
     let wantedworkidr: String = settings
-        .get("wordir")
+        .get("workdir")
         .unwrap_or_else(|_| "/storage".to_owned());
 
     // lets check the creds
