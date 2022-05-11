@@ -1,6 +1,6 @@
 [package]
 name = "rudevil"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 authors = ["Mateusz Matejuk <esavier@erglabs.org>"]
 license = "MIT"
@@ -23,6 +23,8 @@ tracing            = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unwrap_return      = { version = "0.1" }
 users              = { version = "0.11" }
+notify-rust        = { version = "4", default-features = false, features = ["dbus"] }
 
 [features]
 default = []
+notifications = []

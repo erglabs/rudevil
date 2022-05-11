@@ -10,6 +10,7 @@ ExecStart=/opt/rudevil/rudevil
 Environment=RUDEVIL_USER="root"
 Environment=RUDEVIL_GROUP="plugdev"
 Environment=RUDEVIL_WORKDIR="/storage:
+Environment="DISPLAY=:0"
 
 [Install]
 WantedBy=multi-user.target

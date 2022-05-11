@@ -2,21 +2,20 @@ use config::Config;
 use file_owner::{set_group, set_owner};
 use guard::*;
 use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
+use regex::Regex;
+use rudevil::notifications::desktop::notify;
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::Duration;
+use sys_mount::{self, FilesystemType};
+use sys_mount::{unmount, UnmountFlags};
+use sys_mount::{Mount, MountFlags, SupportedFilesystems};
 use tokio::fs::remove_dir;
 use tracing::instrument;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use users::{Groups, Users, UsersCache};
-
-use regex::Regex;
-
-use sys_mount::{self, FilesystemType};
-use sys_mount::{unmount, UnmountFlags};
-use sys_mount::{Mount, MountFlags, SupportedFilesystems};
 
 /// Translates desired group (in string) to group id
 ///
@@ -32,15 +31,15 @@ use sys_mount::{Mount, MountFlags, SupportedFilesystems};
 /// Returns u32 if the group does exists
 #[instrument]
 async fn find_gid(name: String) -> anyhow::Result<u32> {
-    let cache = UsersCache::new();
-    let group = cache.get_group_by_name(&name);
-    guard::guard!(let group = group.unwrap() else { return Err(anyhow::anyhow!("no such group")) } );
-    tracing::info!(
-        "found group: {} with id {}",
-        group.name().to_string_lossy(),
-        group.gid()
-    );
-    Ok(group.gid())
+  let cache = UsersCache::new();
+  let group = cache.get_group_by_name(&name);
+  guard::guard!(let group = group.unwrap() else { return Err(anyhow::anyhow!("no such group")) } );
+  tracing::info!(
+    "found group: {} with id {}",
+    group.name().to_string_lossy(),
+    group.gid()
+  );
+  Ok(group.gid())
 }
 
 /// Translates user (in string) to user id
@@ -57,16 +56,16 @@ async fn find_gid(name: String) -> anyhow::Result<u32> {
 /// Returns u32 if the user does exists
 #[instrument]
 async fn find_uid(name: String) -> anyhow::Result<u32> {
-    tracing::info!("requesting user with {}", name);
-    let cache = UsersCache::new();
-    let user = cache.get_user_by_name(&name);
-    guard::guard!(let Some(user) = user else { return Err(anyhow::anyhow!("no such group")) } );
-    tracing::info!(
-        "found user: {} with id {}",
-        user.name().to_string_lossy(),
-        user.uid()
-    );
-    Ok(user.uid())
+  tracing::info!("requesting user with {}", name);
+  let cache = UsersCache::new();
+  let user = cache.get_user_by_name(&name);
+  guard::guard!(let Some(user) = user else { return Err(anyhow::anyhow!("no such group")) } );
+  tracing::info!(
+    "found user: {} with id {}",
+    user.name().to_string_lossy(),
+    user.uid()
+  );
+  Ok(user.uid())
 }
 
 /// Validates whether the desired workdir exists
@@ -87,32 +86,32 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
 /// Returns PathBuf if its okay
 #[instrument]
 async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
-    let res = PathBuf::from(&path);
-    if res.is_symlink() {
-        return Err(anyhow::anyhow!(
-            "path does not exists, do not waste my time, got {}",
-            &path
-        ));
-    };
-    if !res.is_dir() {
-        return Err(anyhow::anyhow!("desired path is invalid, not a dir"));
-    };
-    if !res.starts_with("/") {
-        return Err(anyhow::anyhow!(
-            "wordkir path must start at root, got {}",
-            &path
-        ));
-    };
-    if !res.is_absolute() {
-        return Err(anyhow::anyhow!(
-            "desired path must be absolute, got {}",
-            &path
-        ));
-    };
-    if res.is_symlink() {
-        return Err(anyhow::anyhow!("path can not be a symlink"));
-    };
-    Ok(res)
+  let res = PathBuf::from(&path);
+  if res.is_symlink() {
+    return Err(anyhow::anyhow!(
+      "path does not exists, do not waste my time, got {}",
+      &path
+    ));
+  };
+  if !res.is_dir() {
+    return Err(anyhow::anyhow!("desired path is invalid, not a dir"));
+  };
+  if !res.starts_with("/") {
+    return Err(anyhow::anyhow!(
+      "wordkir path must start at root, got {}",
+      &path
+    ));
+  };
+  if !res.is_absolute() {
+    return Err(anyhow::anyhow!(
+      "desired path must be absolute, got {}",
+      &path
+    ));
+  };
+  if res.is_symlink() {
+    return Err(anyhow::anyhow!("path can not be a symlink"));
+  };
+  Ok(res)
 }
 
 /// Validates the correlation between device and event
@@ -130,9 +129,9 @@ async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
 /// none, hah :)
 #[instrument]
 async fn extract_device(path: &std::path::Path) -> Option<String> {
-    guard!(let Some(p) = path.as_os_str().to_str() else {return None});
-    guard!(let Some(res) = p.split_terminator('/').last() else {return None});
-    Some(res.to_owned())
+  guard!(let Some(p) = path.as_os_str().to_str() else {return None});
+  guard!(let Some(res) = p.split_terminator('/').last() else {return None});
+  Some(res.to_owned())
 }
 
 /// Handles the "created" event type - case when block device was added
@@ -150,61 +149,70 @@ async fn extract_device(path: &std::path::Path) -> Option<String> {
 /// However, if the filesystem is not supported, the path extractor fails or allowed
 /// path do not match the drive, it will return early.
 #[instrument]
-async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf) {
-    tracing::info!("processing {:?}", path);
-    let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
-    if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
-        return;
-    };
+pub async fn process_created(
+  path: PathBuf,
+  uid: u32,
+  gid: u32,
+  workingdir: PathBuf,
+) -> anyhow::Result<()> {
+  tracing::info!("processing {:?}", path);
+  let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
+  if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
+    return Ok(());
+  };
 
-    guard!(let Some(device) = extract_device(path.as_path()).await else {
-      tracing::warn!("couldn't match the device for some reason?");
-      return;
-    });
+  guard!(let Some(device) = extract_device(path.as_path()).await else {
+    tracing::warn!("couldn't match the device for some reason?");
+    return Ok(());
+  });
 
-    let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
-    tracing::debug!("destpath is {:?}", dest);
+  tracing::info!("processing {:?}, event=created", path);
+  notify(format!("mounting device: {}", device).as_str())?;
 
-    // since this point we need to remember to cleanup
-    std::fs::create_dir(dest.clone()).unwrap();
-    let metadata = std::fs::metadata(dest.clone()).unwrap();
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o775);
+  let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
+  tracing::debug!("destpath is {:?}", dest);
 
-    // set ownership before mounting
-    if let Err(e) = set_owner(&path, uid) {
-        tracing::error!("failed to set user ownership! {}", e);
-        if let Err(e) = remove_dir(&path).await {
-            tracing::error!("tried to cleanup but this happened: {:?}", e);
-        }
+  // since this point we need to remember to cleanup
+  std::fs::create_dir(dest.clone()).unwrap();
+  let metadata = std::fs::metadata(dest.clone()).unwrap();
+  let mut permissions = metadata.permissions();
+  permissions.set_mode(0o775);
+
+  // set ownership before mounting
+  if let Err(e) = set_owner(&path, uid) {
+    tracing::error!("failed to set user ownership! {}", e);
+    if let Err(e) = remove_dir(&path).await {
+      tracing::error!("tried to cleanup but this happened: {:?}", e);
     }
-    if let Err(e) = set_group(&path, gid) {
-        tracing::error!("failed to set group ownership! {}", e);
-        if let Err(e) = remove_dir(&path).await {
-            tracing::error!("tried to cleanup but this happened: {:?}", e);
-        }
+  }
+  if let Err(e) = set_group(&path, gid) {
+    tracing::error!("failed to set group ownership! {}", e);
+    if let Err(e) = remove_dir(&path).await {
+      tracing::error!("tried to cleanup but this happened: {:?}", e);
     }
+  }
 
-    // Fetch a listed of supported file systems on this system. This will be used
-    // as the fstype to `Mount::new`, as the `Auto` mount parameter.
-    let supported = match SupportedFilesystems::new() {
-        Ok(supported) => supported,
-        Err(why) => {
-            tracing::error!("failed to get supported file systems: {}", why);
-            return;
-        }
-    };
-    // The source block will be mounted to the target directory, and the fstype is likely
-    // one of the supported file systems.
-    let result = Mount::builder()
-        .fstype(FilesystemType::from(&supported))
-        .flags(MountFlags::NODEV)
-        .flags(MountFlags::NOSUID)
-        .mount(&path, dest);
-
-    if let Err(e) = result {
-        tracing::error!("mount failed, {}", e)
+  // Fetch a listed of supported file systems on this system. This will be used
+  // as the fstype to `Mount::new`, as the `Auto` mount parameter.
+  let supported = match SupportedFilesystems::new() {
+    Ok(supported) => supported,
+    Err(why) => {
+      tracing::error!("failed to get supported file systems: {}", why);
+      return Ok(());
     }
+  };
+  // The source block will be mounted to the target directory, and the fstype is likely
+  // one of the supported file systems.
+  let result = Mount::builder()
+    .fstype(FilesystemType::from(&supported))
+    .flags(MountFlags::NODEV)
+    .flags(MountFlags::NOSUID)
+    .mount(&path, dest);
+
+  if let Err(e) = result {
+    tracing::error!("mount failed, {}", e)
+  }
+  Ok(())
 }
 
 /// Handles the "removed" event type - case when block device was removed
@@ -221,101 +229,100 @@ async fn process_created(path: PathBuf, uid: u32, gid: u32, workingdir: PathBuf)
 ///
 /// Should be none. Just early returns in case the path do not match.
 #[instrument]
-async fn process_removed(path: PathBuf, workingdir: PathBuf) {
-    let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
-    if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
-        return;
-    };
+async fn process_removed(path: PathBuf, workingdir: PathBuf) -> anyhow::Result<()> {
+  let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
+  if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
+    return Ok(());
+  };
 
-    guard!(let Some(device) = extract_device(path.as_path()).await else {
-      tracing::warn!("couldn't match the device for some reason?");
-      return;
-    });
-    tracing::info!("processing {:?}", path);
+  guard!(let Some(device) = extract_device(path.as_path()).await else {
+    tracing::warn!("couldn't match the device for some reason?");
+    return Ok(());
+  });
 
-    let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
-    tracing::debug!("destpath is {:?}", dest);
+  tracing::info!("processing {:?}, event=removed", path);
+  notify(format!("removed device: {}", device).as_str())?;
 
-    if let Err(why) = unmount(&dest, UnmountFlags::FORCE) {
-        tracing::error!("failed to unmount {:?}: {}", path, why);
-    }
+  let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
+  tracing::debug!("destpath is {:?}", dest);
 
-    drop(remove_dir(dest).await);
+  if let Err(why) = unmount(&dest, UnmountFlags::FORCE) {
+    tracing::error!("failed to unmount {:?}: {}", path, why);
+  }
+
+  drop(remove_dir(dest).await);
+  Ok(())
 }
 
 /// Yo, main body what do you expect. It does whatever usually main does.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // ### logging setup
-    tracing::info!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
-    let is_debug_mode = std::env::var("DEBUGMODE").map_or(false, |x| !x.is_empty());
+  // ### logging setup
+  tracing::info!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
+  let is_debug_mode = std::env::var("DEBUGMODE").map_or(false, |x| !x.is_empty());
 
-    let subscriber = tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(
-        std::env::var("RUST_LOG").unwrap_or_else(|_| "debug".into()),
-    ));
-    if is_debug_mode {
-        subscriber
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_line_number(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .pretty(),
-            )
-            .init()
-    } else {
-        subscriber
-            .with(tracing_subscriber::fmt::layer().compact())
-            .init();
+  let subscriber = tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(
+    std::env::var("RUST_LOG").unwrap_or_else(|_| "debug".into()),
+  ));
+  if is_debug_mode {
+    subscriber
+      .with(
+        tracing_subscriber::fmt::layer()
+          .with_line_number(true)
+          .with_thread_ids(true)
+          .with_thread_names(true)
+          .pretty(),
+      )
+      .init()
+  } else {
+    subscriber
+      .with(tracing_subscriber::fmt::layer().compact())
+      .init();
+  }
+
+  // ### preparations
+  let settings = Config::builder()
+    .add_source(config::Environment::with_prefix("RUDEVIL").separator("_"))
+    .build()
+    .unwrap();
+
+  notify("rudevil is running! <3")?;
+  tracing::info!("config is {:?}", &settings);
+
+  // lets default here
+  let wanteduser: String = settings.get("user").unwrap_or_else(|_| "root".to_owned());
+  let wantedgroup: String = settings
+    .get("group")
+    .unwrap_or_else(|_| "plugdev".to_owned());
+  let wantedworkidr: String = settings
+    .get("workdir")
+    .unwrap_or_else(|_| "/storage".to_owned());
+
+  // lets check the creds
+  let user_id = find_uid(wanteduser.to_owned()).await?;
+  let group_id = find_gid(wantedgroup.to_owned()).await?;
+  let workdir = find_workir(wantedworkidr.to_owned()).await?;
+
+  tracing::trace!("The '{}' group has the ID {}", wantedgroup, group_id);
+  tracing::trace!("The '{}' user has the ID {}", wanteduser, user_id);
+  tracing::trace!("mounting filesystems at {:?}", &workdir);
+
+  // setup watcher
+  let (tx, rx) = channel();
+  let mut watcher = watcher(tx, Duration::from_secs(1)).unwrap();
+  watcher.watch("/dev", RecursiveMode::NonRecursive).unwrap();
+
+  // setup router
+  loop {
+    match rx.recv() {
+      Ok(DebouncedEvent::Create(path)) => {
+        process_created(path, user_id, group_id, workdir.clone()).await?;
+      }
+      Ok(DebouncedEvent::Remove(path)) => {
+        process_removed(path, workdir.clone()).await?;
+      }
+      Err(e) => tracing::error!("watch error: {:?}", e),
+      _ => {} // do nothing on unsupported events,
     }
-
-    // ### preparations
-    let settings = Config::builder()
-        .add_source(config::Environment::with_prefix("RUDEVIL").separator("_"))
-        .build()
-        .unwrap();
-
-    tracing::info!("config is {:?}", &settings);
-
-    // // let out = settings.get_array("user")?;
-    dbg!(&settings);
-    // let r : String = settings.get("user")?;
-    // dbg!(r);
-
-    // lets default here
-    let wanteduser: String = settings.get("user").unwrap_or_else(|_| "root".to_owned());
-    let wantedgroup: String = settings
-        .get("group")
-        .unwrap_or_else(|_| "plugdev".to_owned());
-    let wantedworkidr: String = settings
-        .get("workdir")
-        .unwrap_or_else(|_| "/storage".to_owned());
-
-    // lets check the creds
-    let user_id = find_uid(wanteduser.to_owned()).await?;
-    let group_id = find_gid(wantedgroup.to_owned()).await?;
-    let workdir = find_workir(wantedworkidr.to_owned()).await?;
-
-    tracing::trace!("The '{}' group has the ID {}", wantedgroup, group_id);
-    tracing::trace!("The '{}' user has the ID {}", wanteduser, user_id);
-    tracing::trace!("mounting filesystems at {:?}", &workdir);
-
-    // setup watcher
-    let (tx, rx) = channel();
-    let mut watcher = watcher(tx, Duration::from_secs(1)).unwrap();
-    watcher.watch("/dev", RecursiveMode::NonRecursive).unwrap();
-
-    // setup router
-    loop {
-        match rx.recv() {
-            Ok(DebouncedEvent::Create(path)) => {
-                process_created(path, user_id, group_id, workdir.clone()).await;
-            }
-            Ok(DebouncedEvent::Remove(path)) => {
-                process_removed(path, workdir.clone()).await;
-            }
-            Err(e) => tracing::error!("watch error: {:?}", e),
-            _ => {} // do nothing on unsupported events,
-        }
-    }
+  }
 }
