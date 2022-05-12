@@ -85,7 +85,7 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
 /// Returns Error if the group does not exists
 /// Returns PathBuf if its okay
 #[instrument]
-async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
+async fn find_workdir(path: String) -> anyhow::Result<PathBuf> {
     let res = PathBuf::from(&path);
     if res.is_symlink() {
         anyhow::bail!("path does not exists, do not waste my time, got {}", &path);
@@ -300,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
     // lets check the creds
     let user_id = find_uid(wanteduser.to_owned()).await?;
     let group_id = find_gid(wantedgroup.to_owned()).await?;
-    let workdir = find_workir(wantedworkidr.to_owned()).await?;
+    let workdir = find_workdir(wantedworkidr.to_owned()).await?;
 
     tracing::trace!("The '{}' group has the ID {}", wantedgroup, group_id);
     tracing::trace!("The '{}' user has the ID {}", wanteduser, user_id);
