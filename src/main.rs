@@ -33,7 +33,7 @@ use users::{Groups, Users, UsersCache};
 async fn find_gid(name: String) -> anyhow::Result<u32> {
   let cache = UsersCache::new();
   let group = cache.get_group_by_name(&name);
-  guard::guard!(let group = group.unwrap() else { return Err(anyhow::anyhow!("no such group")) } );
+  guard::guard!(let group = group.unwrap() else { anyhow::bail!("no such group") } );
   tracing::info!(
     "found group: {} with id {}",
     group.name().to_string_lossy(),
@@ -59,7 +59,7 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
   tracing::info!("requesting user with {}", name);
   let cache = UsersCache::new();
   let user = cache.get_user_by_name(&name);
-  guard::guard!(let Some(user) = user else { return Err(anyhow::anyhow!("no such group")) } );
+  guard::guard!(let Some(user) = user else { anyhow::bail!("no such group") } );
   tracing::info!(
     "found user: {} with id {}",
     user.name().to_string_lossy(),
@@ -88,28 +88,28 @@ async fn find_uid(name: String) -> anyhow::Result<u32> {
 async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
   let res = PathBuf::from(&path);
   if res.is_symlink() {
-    return Err(anyhow::anyhow!(
+    anyhow::bail!(
       "path does not exists, do not waste my time, got {}",
       &path
-    ));
+    );
   };
   if !res.is_dir() {
-    return Err(anyhow::anyhow!("desired path is invalid, not a dir"));
+    anyhow::bail!("desired path is invalid, not a dir");
   };
   if !res.starts_with("/") {
-    return Err(anyhow::anyhow!(
-      "wordkir path must start at root, got {}",
+    anyhow::bail!(
+      "workdir path must start at root, got {}",
       &path
-    ));
+    );
   };
   if !res.is_absolute() {
-    return Err(anyhow::anyhow!(
+    anyhow::bail!(
       "desired path must be absolute, got {}",
       &path
-    ));
+    );
   };
   if res.is_symlink() {
-    return Err(anyhow::anyhow!("path can not be a symlink"));
+    anyhow::bail!("path can not be a symlink");
   };
   Ok(res)
 }
@@ -129,9 +129,7 @@ async fn find_workir(path: String) -> anyhow::Result<PathBuf> {
 /// none, hah :)
 #[instrument]
 async fn extract_device(path: &std::path::Path) -> Option<String> {
-  guard!(let Some(p) = path.as_os_str().to_str() else {return None});
-  guard!(let Some(res) = p.split_terminator('/').last() else {return None});
-  Some(res.to_owned())
+  Some(path.as_os_str().to_str()?.split_terminator('/').last()?.to_owned())
 }
 
 /// Handles the "created" event type - case when block device was added
@@ -149,7 +147,7 @@ async fn extract_device(path: &std::path::Path) -> Option<String> {
 /// However, if the filesystem is not supported, the path extractor fails or allowed
 /// path do not match the drive, it will return early.
 #[instrument]
-pub async fn process_created(
+pub async fn process_created (
   path: PathBuf,
   uid: u32,
   gid: u32,
@@ -158,12 +156,12 @@ pub async fn process_created(
   tracing::info!("processing {:?}", path);
   let re = Regex::new("/dev/sd[a-zA-Z]{1,2}[0-9]{1,2}").unwrap();
   if re.find(path.as_os_str().to_str().unwrap_or("")).is_none() {
-    return Ok(());
+    anyhow::bail!("wrong device name");
   };
 
   guard!(let Some(device) = extract_device(path.as_path()).await else {
     tracing::warn!("couldn't match the device for some reason?");
-    return Ok(());
+    anyhow::bail!("can't match");
   });
 
   tracing::info!("processing {:?}, event=created", path);
@@ -198,9 +196,10 @@ pub async fn process_created(
     Ok(supported) => supported,
     Err(why) => {
       tracing::error!("failed to get supported file systems: {}", why);
-      return Ok(());
+      anyhow::bail!("filesystem not supported");
     }
   };
+
   // The source block will be mounted to the target directory, and the fstype is likely
   // one of the supported file systems.
   let result = Mount::builder()
@@ -250,35 +249,38 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) -> anyhow::Result<(
     tracing::error!("failed to unmount {:?}: {}", path, why);
   }
 
-  drop(remove_dir(dest).await);
+  remove_dir(dest).await?;
   Ok(())
+}
+
+fn enable_logging(with_extra_debug: bool) {  
+    let subscriber = tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(
+      std::env::var("RUST_LOG").unwrap_or_else(|_| "debug".into()),
+    ));
+    if with_extra_debug {
+      subscriber
+        .with(
+          tracing_subscriber::fmt::layer()
+            .with_line_number(true)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .pretty(),
+        )
+        .init()
+    } else {
+      subscriber
+        .with(tracing_subscriber::fmt::layer().compact())
+        .init();
+    }
 }
 
 /// Yo, main body what do you expect. It does whatever usually main does.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
   // ### logging setup
-  tracing::info!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
+  println!("\n\nset DEBUGMODE to anything for easier debugging\n\n");
   let is_debug_mode = std::env::var("DEBUGMODE").map_or(false, |x| !x.is_empty());
-
-  let subscriber = tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(
-    std::env::var("RUST_LOG").unwrap_or_else(|_| "debug".into()),
-  ));
-  if is_debug_mode {
-    subscriber
-      .with(
-        tracing_subscriber::fmt::layer()
-          .with_line_number(true)
-          .with_thread_ids(true)
-          .with_thread_names(true)
-          .pretty(),
-      )
-      .init()
-  } else {
-    subscriber
-      .with(tracing_subscriber::fmt::layer().compact())
-      .init();
-  }
+  enable_logging(is_debug_mode);
 
   // ### preparations
   let settings = Config::builder()
