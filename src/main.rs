@@ -3,7 +3,7 @@ use file_owner::{set_group, set_owner};
 use guard::*;
 use notify::{watcher, DebouncedEvent, RecursiveMode, Watcher};
 use regex::Regex;
-use rudevil::notifications::desktop::notify;
+use rudevil::notifications::desktop::notify as user_notify;
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -162,7 +162,7 @@ pub async fn process_created(
     });
 
     tracing::info!("processing {:?}, event=created", path);
-    notify(format!("mounting device: {}", device).as_str())?;
+    user_notify(format!("mounting device: {}", device).as_str()).await;
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
     tracing::debug!("destpath is {:?}", dest);
@@ -237,7 +237,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) -> anyhow::Result<(
     });
 
     tracing::info!("processing {:?}, event=removed", path);
-    notify(format!("removed device: {}", device).as_str())?;
+    user_notify(format!("removed device: {}", device).as_str()).await;
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
     tracing::debug!("destpath is {:?}", dest);
@@ -285,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    notify("rudevil is running! <3")?;
+    user_notify("rudevil is running! <3").await;
     tracing::info!("config is {:?}", &settings);
 
     // lets default here
