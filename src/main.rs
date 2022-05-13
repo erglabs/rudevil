@@ -162,7 +162,7 @@ pub async fn process_created(
     });
 
     tracing::info!("processing {:?}, event=created", path);
-    user_notify(format!("mounting device: {}", device).as_str()).await;
+    user_notify(format!("mounting device: {}", device).as_str()).await?;
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
     tracing::debug!("destpath is {:?}", dest);
@@ -237,7 +237,7 @@ async fn process_removed(path: PathBuf, workingdir: PathBuf) -> anyhow::Result<(
     });
 
     tracing::info!("processing {:?}, event=removed", path);
-    user_notify(format!("removed device: {}", device).as_str()).await;
+    user_notify(format!("removed device: {}", device).as_str()).await?;
 
     let dest: std::path::PathBuf = workingdir.join(PathBuf::from(device));
     tracing::debug!("destpath is {:?}", dest);
@@ -285,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    user_notify("rudevil is running! <3").await;
+    user_notify("rudevil is running! <3").await?;
     tracing::info!("config is {:?}", &settings);
 
     // lets default here
