@@ -69,6 +69,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libdbus-1-dev 
+
       - name: Cache cargo target dir
         uses: actions/cache@v2.1.6
         with:
